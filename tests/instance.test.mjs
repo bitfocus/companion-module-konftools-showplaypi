@@ -24,6 +24,8 @@ function makeContext() {
 		variableDefinitions: {},
 		actions: {},
 		feedbacks: {},
+		presets: {},
+		structure: [],
 		savedConfig: undefined,
 	}
 
@@ -50,7 +52,10 @@ function makeContext() {
 		checkFeedbacks: () => {},
 		checkAllFeedbacks: () => {},
 		checkFeedbacksById: () => {},
-		setPresetDefinitions: () => {},
+		setPresetDefinitions: (structure, presets) => {
+			record.structure = structure
+			record.presets = presets
+		},
 		setVariableDefinitions: (definitions) => {
 			record.variableDefinitions = definitions
 		},
@@ -223,11 +228,71 @@ async function run(device, record, actionId, options) {
 }
 const sent = (messages) => messages.map((m) => [m.address, ...m.args].join(' ')).join(' | ')
 
+/** The ids of the preset sections, in order. */
+const sectionIds = (record) => record.structure.map((section) => section.id).join()
+
+/**
+ * Every preset must be reachable from a section, and may only use actions and feedbacks that are
+ * offered right now, with a value for every option of their definition.
+ */
+function checkPresets(record, what) {
+	const problems = []
+	const referenced = new Set()
+	for (const section of record.structure) {
+		for (const group of section.definitions) {
+			if (group.presets.length === 0) problems.push(`empty group ${group.id}`)
+			for (const id of group.presets) {
+				referenced.add(id)
+				if (!record.presets[id]) problems.push(`section ${section.id} references missing preset ${id}`)
+			}
+		}
+	}
+	for (const [id, preset] of Object.entries(record.presets)) {
+		if (!referenced.has(id)) problems.push(`preset ${id} is in no section`)
+		if (!preset.style.text && preset.style.text !== '') problems.push(`preset ${id} has no text`)
+		for (const step of preset.steps) {
+			for (const action of [...step.down, ...step.up]) {
+				const definition = record.actions[action.actionId]
+				if (!definition) {
+					problems.push(`preset ${id} uses action ${action.actionId}, which is not offered`)
+					continue
+				}
+				for (const option of definition.options) {
+					if (option.type !== 'static-text' && !(option.id in action.options)) {
+						problems.push(`preset ${id}: action ${action.actionId} lacks option ${option.id}`)
+					}
+				}
+			}
+		}
+		for (const feedback of preset.feedbacks) {
+			const definition = record.feedbacks[feedback.feedbackId]
+			if (!definition) {
+				problems.push(`preset ${id} uses feedback ${feedback.feedbackId}, which is not offered`)
+				continue
+			}
+			for (const option of definition.options) {
+				if (!(option.id in feedback.options)) {
+					problems.push(`preset ${id}: feedback ${feedback.feedbackId} lacks option ${option.id}`)
+				}
+			}
+			if (definition.type === 'boolean' && !feedback.style) problems.push(`preset ${id}: feedback without style`)
+		}
+	}
+	check(
+		`presets are consistent (${what}, ${Object.keys(record.presets).length} presets)`,
+		problems.length === 0,
+		problems.join('; '),
+	)
+}
+
 // Without a host
 {
 	const { instance, record } = await startInstance({ host: '' })
 	check('no host: bad config', lastStatus(record).status === 'bad_config')
 	check('no host: only blackout is offered', offered(record.actions) === 'blackout', offered(record.actions))
+	check('no host: only the general presets', sectionIds(record) === 'general', sectionIds(record))
+	check('no host: blackout preset without the video-only feedback', record.presets.blackout_on.feedbacks.length === 0)
+	checkPresets(record, 'no host')
 	await instance.destroy()
 }
 
@@ -355,6 +420,28 @@ const device = await startFakeDevice()
 
 	// The audio player
 	await waitFor(() => record.variables.audio_jingle_count === 2, 'audio file list')
+	check('video and audio preset sections', sectionIds(record) === 'general,video,audio', sectionIds(record))
+	check('blackout preset shows the blackout in video mode', record.presets.blackout_on.feedbacks.length === 1)
+	check(
+		'one preset per video entry',
+		'video_entry:010_intro_mp4' in record.presets && 'video_cue:020_sponsors_15sec_jpg' in record.presets,
+	)
+	check('one preset per video playlist', 'video_playlist:morning' in record.presets)
+	check('one preset per jingle', 'audio_jingle:02_applause_mp3' in record.presets)
+	check(
+		'one preset per track and audio playlist',
+		'audio_track:walk_in_mp3' in record.presets && 'audio_playlist:admission' in record.presets,
+	)
+	check(
+		'still images get their own colour',
+		record.presets['video_entry:020_sponsors_15sec_jpg'].style.bgcolor !==
+			record.presets['video_entry:010_intro_mp4'].style.bgcolor,
+	)
+	check(
+		'preset text uses the connection label',
+		record.presets.video_now_playing.style.text.includes('$(showplaypi:video_title)'),
+	)
+	checkPresets(record, 'video and audio')
 	check(
 		'audio loop variables',
 		record.variables.audio_loop_title === 'Lounge 01' && record.variables.audio_loop_remaining === '0:06',
@@ -481,6 +568,9 @@ const device = await startFakeDevice()
 			'blackout,browser_home,browser_idle,browser_refresh,browser_restart,browser_url,ontime_view',
 		offered(record.actions),
 	)
+	check('browser and ontime preset sections', sectionIds(record) === 'general,browser,ontime', sectionIds(record))
+	check('one preset per ontime view', 'ontime_view_backstage' in record.presets)
+	checkPresets(record, 'browser or ontime')
 	const url = await run(device, record, 'browser_url', { url: ' https://müller.de/zeit plan ' })
 	check('url', sent(url) === '/showplaypi/browser/url https://müller.de/zeit plan', sent(url))
 	const badUrl = await run(device, record, 'browser_url', { url: 'www.example.com' })
@@ -543,6 +633,12 @@ const device = await startFakeDevice()
 		emulatorOption.choices.map((c) => c.id).join() === ',JGogBBWueb55Y9MWfTphX,k2',
 		JSON.stringify(emulatorOption.choices),
 	)
+	check('companion preset sections', sectionIds(record) === 'general,browser,companion', sectionIds(record))
+	check(
+		'one preset per emulator',
+		'companion_emulator:k2' in record.presets && 'companion_emulator:jgogbbwueb55y9mwftphx' in record.presets,
+	)
+	checkPresets(record, 'companion')
 	const companionCommands = [
 		['companion_emulator', { emulator: '' }, '/showplaypi/companion/emulator'],
 		['companion_emulator', { emulator: 'k2' }, '/showplaypi/companion/emulator k2'],
