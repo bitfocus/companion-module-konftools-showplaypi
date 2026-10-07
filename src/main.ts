@@ -8,6 +8,18 @@ import { UpdatePresets } from './presets.js'
 import { ShowPlayPiConnection } from './connection.js'
 import type { OscArgument, OscMessage } from './osc.js'
 import {
+	audioFingerprint,
+	parseAudioFiles,
+	parseAudioStatus,
+	parseVideoFiles,
+	parseVideoStatus,
+	playlistsFingerprint,
+	type AudioFiles,
+	type AudioStatus,
+	type Playlist,
+	type VideoStatus,
+} from './players.js'
+import {
 	activeAreas,
 	isDetectedMode,
 	ModeDetector,
@@ -36,6 +48,11 @@ const PROBE_INTERVAL_MS = 30_000
 const MISSED_ANSWERS = 3
 /** ...but never sooner than this, so a short interval does not make the status flicker. */
 const MIN_FAILURE_MS = 10_000
+/**
+ * How often the file lists are requested. The device scans its drive every few seconds; each list
+ * request costs it a moment, so this is kept slow. Dropdowns are rebuilt only when a list changed.
+ */
+const LIST_INTERVAL_MS = 10_000
 
 /** The replies that prove a mode or service is active (docs/OSC.md of ShowPlayPI). */
 const PROBE_REPLIES: Record<string, ProbeKind> = {
@@ -56,6 +73,14 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	connected = false
 	/** The command groups available in the active mode, see activeAreas() */
 	areas: Set<Area> = new Set()
+	/** The last reply to /showplaypi/video/status */
+	videoStatus: VideoStatus | undefined
+	/** The playlists of the video player, from /showplaypi/video/list */
+	videoPlaylists: Playlist[] = []
+	/** The last reply to /showplaypi/audio/status */
+	audioStatus: AudioStatus | undefined
+	/** Jingles and playlists of the audio player, from /showplaypi/audio/list */
+	audioFiles: AudioFiles = { jingles: [], playlists: [] }
 
 	#detector = new ModeDetector()
 	#connection: ShowPlayPiConnection | undefined
@@ -63,7 +88,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	#probeTimeout: NodeJS.Timeout | undefined
 	#lastSystemAt = 0
 	#startedAt = 0
-	/** Identifies the definitions currently set, so they are only rebuilt when the areas change. */
+	/** Identifies the definitions currently set, so they are only rebuilt when areas or lists change. */
 	#definitionsKey = ''
 	/** The connection settings in use, so saving only the detected mode does not reconnect. */
 	#connectionKey = ''
@@ -108,6 +133,10 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 			// Another device: what was detected for the old one does not apply
 			this.#detector = new ModeDetector()
 			this.system = undefined
+			this.videoStatus = undefined
+			this.videoPlaylists = []
+			this.audioStatus = undefined
+			this.audioFiles = { jingles: [], playlists: [] }
 		}
 
 		if (this.#connectionSettings() !== this.#connectionKey) {
@@ -156,6 +185,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 			setInterval(() => this.#pollSystem(), this.config.systemInterval * 1000),
 			setInterval(() => this.#pollStatus(), this.config.statusInterval * 1000),
 			setInterval(() => this.#probe(), PROBE_INTERVAL_MS),
+			setInterval(() => this.#pollLists(), LIST_INTERVAL_MS),
 		)
 	}
 
@@ -185,6 +215,13 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		if (!this.connected) return
 		if (this.areas.has('video')) this.send('/showplaypi/video/status')
 		if (this.areas.has('audio')) this.send('/showplaypi/audio/status')
+	}
+
+	/** The file lists, only for what runs in the active mode. */
+	#pollLists(): void {
+		if (!this.connected) return
+		if (this.areas.has('video')) this.send('/showplaypi/video/list')
+		if (this.areas.has('audio')) this.send('/showplaypi/audio/list')
 	}
 
 	/**
@@ -224,13 +261,87 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		}
 
 		const kind = PROBE_REPLIES[message.address]
-		if (kind) {
-			this.#detector.noteReply(kind, now)
-			this.#applyDetection()
+		if (!kind) {
+			this.log('debug', `Unexpected message from the device: ${message.address}`)
 			return
 		}
 
-		this.log('debug', `Unexpected message from the device: ${message.address}`)
+		this.#detector.noteReply(kind, now)
+		this.#applyDetection()
+
+		const json = message.args[0]
+		if (typeof json !== 'string') return
+		try {
+			switch (message.address) {
+				case '/showplaypi/video/status':
+					this.#handleVideoStatus(parseVideoStatus(json))
+					break
+				case '/showplaypi/video/files':
+					this.#handleVideoFiles(parseVideoFiles(json))
+					break
+				case '/showplaypi/audio/status':
+					this.#handleAudioStatus(parseAudioStatus(json))
+					break
+				case '/showplaypi/audio/files':
+					this.#handleAudioFiles(parseAudioFiles(json))
+					break
+			}
+		} catch (error) {
+			this.log('warn', `Unreadable reply ${message.address}: ${(error as Error).message}`)
+		}
+	}
+
+	#handleVideoStatus(status: VideoStatus): void {
+		const previous = this.videoStatus
+		this.videoStatus = status
+		this.#updateVariableValues()
+		this.checkFeedbacks(
+			'video_state',
+			'video_entry_active',
+			'video_playlist_active',
+			'video_repeat',
+			'video_muted',
+			'video_remaining_below',
+			'blackout',
+		)
+		// The file list is current as soon as a playlist is chosen that the list does not know yet
+		if (status.playlist && !this.videoPlaylists.some((playlist) => playlist.name === status.playlist)) {
+			if (status.playlist !== previous?.playlist) this.send('/showplaypi/video/list')
+		}
+	}
+
+	#handleVideoFiles(playlists: Playlist[]): void {
+		this.videoPlaylists = playlists
+		this.#updateDefinitions()
+		this.#updateVariableValues()
+	}
+
+	#handleAudioStatus(status: AudioStatus): void {
+		const previous = this.audioStatus
+		this.audioStatus = status
+		this.#updateVariableValues()
+		this.checkFeedbacks(
+			'audio_loop_state',
+			'audio_loop_track_active',
+			'audio_loop_playlist_active',
+			'audio_loop_remaining_below',
+			'audio_loop_repeat',
+			'audio_loop_shuffle',
+			'audio_jingle_playing',
+			'audio_jingle_mode',
+			'audio_muted',
+		)
+		const playlist = status.loop.playlist
+		if (playlist && playlist !== previous?.loop.playlist) {
+			if (!this.audioFiles.playlists.some((candidate) => candidate.name === playlist))
+				this.send('/showplaypi/audio/list')
+		}
+	}
+
+	#handleAudioFiles(files: AudioFiles): void {
+		this.audioFiles = files
+		this.#updateDefinitions()
+		this.#updateVariableValues()
 	}
 
 	#handleSystem(message: OscMessage, now: number): void {
@@ -259,6 +370,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		if (restarted) {
 			this.#detector.reset()
 			this.#probe()
+			this.#pollLists()
 		}
 
 		this.#applyDetection()
@@ -278,6 +390,8 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		}
 
 		if (changed) this.checkFeedbacks('connected')
+		// Back in touch: the lists may have changed in the meantime
+		if (changed && connected) this.#pollLists()
 	}
 
 	#reportProblem(problem: string): void {
@@ -326,10 +440,18 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	/** Sets actions, feedbacks, variables and presets for the active areas, if they have changed. */
 	#updateDefinitions(force = false): void {
 		const areas = activeAreas(this.mode, this.audio)
-		const key = [...areas].sort().join(',')
+		const areasKey = [...areas].sort().join(',')
+		const key = JSON.stringify([
+			areasKey,
+			areas.has('video') ? playlistsFingerprint(this.videoPlaylists) : '',
+			areas.has('audio') ? audioFingerprint(this.audioFiles) : '',
+		])
 		if (!force && key === this.#definitionsKey) return
 
-		if (!force) this.log('info', `Offering the commands for: ${this.#describeMode()}`)
+		const areasChanged = areasKey !== [...this.areas].sort().join(',')
+		if (!force && areasChanged) this.log('info', `Offering the commands for: ${this.#describeMode()}`)
+		const videoAdded = areas.has('video') && !this.areas.has('video')
+		const audioAdded = areas.has('audio') && !this.areas.has('audio')
 		this.areas = areas
 		this.#definitionsKey = key
 
@@ -339,6 +461,10 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		UpdatePresets(this)
 		this.#updateVariableValues()
 		this.checkAllFeedbacks()
+
+		// Fill the dropdowns of a newly active player straight away
+		if (videoAdded && this.connected) this.send('/showplaypi/video/list')
+		if (audioAdded && this.connected) this.send('/showplaypi/audio/list')
 	}
 
 	#updateVariableValues(): void {

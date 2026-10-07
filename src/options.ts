@@ -9,19 +9,22 @@ export type FadeOptions = {
 }
 
 /**
- * A checkbox to override the fade time and the time itself in seconds (the device works in
- * milliseconds; the module converts). Without the checkbox the command goes out without a fade
- * argument and the default from the device configuration applies.
+ * A checkbox to fade and the fade time in seconds (the device works in milliseconds; the module
+ * converts). Without the checkbox the command goes out without a fade argument: the video player then
+ * uses its default fade time, the audio player changes at once.
  */
 export function fadeOptions(
-	label = 'Fade time (seconds)',
+	withoutFade: 'default' | 'immediate' = 'default',
 ): [CompanionInputFieldCheckbox<'useFade'>, CompanionInputFieldNumber<'fade'>] {
 	return [
 		{
 			type: 'checkbox',
 			id: 'useFade',
-			label: 'Own fade time',
-			tooltip: 'Off: the default fade time from the device configuration applies.',
+			label: withoutFade === 'default' ? 'Own fade time' : 'Fade',
+			tooltip:
+				withoutFade === 'default'
+					? 'Off: the default fade time of the player applies.'
+					: 'Off: the change happens at once.',
 			default: false,
 			// Referenced by isVisibleExpression, which only works with fields that are never expressions
 			disableAutoExpression: true,
@@ -29,7 +32,7 @@ export function fadeOptions(
 		{
 			type: 'number',
 			id: 'fade',
-			label,
+			label: 'Fade time (seconds)',
 			default: 1,
 			min: 0,
 			max: 60,
@@ -42,4 +45,9 @@ export function fadeOptions(
 /** The optional fade argument (milliseconds) for an OSC command. */
 export function fadeArgs(options: Partial<FadeOptions>): OscArgument[] {
 	return options.useFade ? [oscInt(secondsToMs(options.fade))] : []
+}
+
+/** An option value as trimmed text. Expressions can yield any type; only text and numbers count. */
+export function optionText(value: unknown): string {
+	return typeof value === 'string' || typeof value === 'number' ? String(value).trim() : ''
 }
