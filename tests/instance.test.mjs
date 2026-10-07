@@ -119,12 +119,29 @@ async function startInstance(over) {
 }
 
 const lastStatus = (record) => record.statuses[record.statuses.length - 1] ?? {}
+/** The ids that have a definition, i.e. are offered to the user. */
+const offered = (definitions) =>
+	Object.keys(definitions)
+		.filter((id) => definitions[id])
+		.sort()
+		.join()
+
+/** Runs an action and returns the commands the device received for it. */
+async function run(device, record, actionId, options) {
+	device.received.length = 0
+	await record.actions[actionId].callback({ options })
+	await new Promise((resolve) => setTimeout(resolve, 150))
+	return device.received.filter(
+		(message) => message.address !== '/showplaypi/system' && !message.address.endsWith('/status'),
+	)
+}
+const sent = (messages) => messages.map((m) => [m.address, ...m.args].join(' ')).join(' | ')
 
 // Without a host
 {
 	const { instance, record } = await startInstance({ host: '' })
 	check('no host: bad config', lastStatus(record).status === 'bad_config')
-	check('no host: only blackout is offered', Object.keys(record.actions).join() === 'blackout')
+	check('no host: only blackout is offered', offered(record.actions) === 'blackout', offered(record.actions))
 	await instance.destroy()
 }
 
@@ -158,6 +175,7 @@ const device = await startFakeDevice()
 		record.feedbacks.ram_state.callback({ options: { level: 'critical' } }) === false,
 	)
 	check('connected feedback', record.feedbacks.connected.callback({ options: {} }) === true)
+	check('no browser or ontime actions in video mode', !/browser_|ontime_/.test(offered(record.actions)))
 
 	device.received.length = 0
 	await record.actions.blackout.callback({ options: { state: 'on', useFade: true, fade: 1.5 } })
@@ -193,6 +211,37 @@ const device = await startFakeDevice()
 	const blackout = device.received.find((m) => m.address === '/showplaypi/blackout')
 	check('blackout off without fade', JSON.stringify(blackout?.args) === '[0]', JSON.stringify(blackout?.args))
 	check('blackout offers no fade outside video mode', !record.actions.blackout.options.some((o) => o.id === 'fade'))
+
+	check(
+		'browser and ontime actions are offered',
+		offered(record.actions) ===
+			'blackout,browser_home,browser_idle,browser_refresh,browser_restart,browser_url,ontime_view',
+		offered(record.actions),
+	)
+	const url = await run(device, record, 'browser_url', { url: ' https://müller.de/zeit plan ' })
+	check('url', sent(url) === '/showplaypi/browser/url https://müller.de/zeit plan', sent(url))
+	const badUrl = await run(device, record, 'browser_url', { url: 'www.example.com' })
+	check('an address without scheme is not sent', badUrl.length === 0, sent(badUrl))
+	const idle = await run(device, record, 'browser_idle', { seconds: 90 })
+	check('idle in milliseconds', sent(idle) === '/showplaypi/browser/idle 90000', sent(idle))
+	const idleOff = await run(device, record, 'browser_idle', { seconds: 0 })
+	check('idle off', sent(idleOff) === '/showplaypi/browser/idle 0', sent(idleOff))
+	const idleMax = await run(device, record, 'browser_idle', { seconds: 999999 })
+	check('idle at most 24 hours', sent(idleMax) === '/showplaypi/browser/idle 86400000', sent(idleMax))
+	for (const [id, address] of [
+		['browser_home', '/showplaypi/browser/home'],
+		['browser_refresh', '/showplaypi/browser/refresh'],
+		['browser_restart', '/showplaypi/browser/restart'],
+	]) {
+		const messages = await run(device, record, id, {})
+		check(`${id} without arguments`, sent(messages) === address, sent(messages))
+	}
+	const view = await run(device, record, 'ontime_view', { view: 'backstage', parameters: '?stopCycle=true' })
+	check('ontime view with settings', sent(view) === '/showplaypi/ontime/view backstage stopCycle=true', sent(view))
+	const plainView = await run(device, record, 'ontime_view', { view: 'timer', parameters: '' })
+	check('ontime view without settings', sent(plainView) === '/showplaypi/ontime/view timer', sent(plainView))
+	const badView = await run(device, record, 'ontime_view', { view: '../admin', parameters: '' })
+	check('an invalid view name is not sent', badView.length === 0, sent(badView))
 	await instance.destroy()
 }
 
@@ -201,9 +250,10 @@ const device = await startFakeDevice()
 	device.mode = 'ontime'
 	device.audio = false
 	device.reportMode = true
-	const { instance } = await startInstance()
+	const { instance, record } = await startInstance()
 	await waitFor(() => instance.mode === 'ontime', 'reported mode', 3000)
 	check('reported ontime mode is used', instance.mode === 'ontime')
+	check('ontime mode offers the browser and ontime', /browser_url.*ontime_view/.test(offered(record.actions)))
 	device.reportMode = false
 	await instance.destroy()
 }
@@ -212,9 +262,13 @@ const device = await startFakeDevice()
 {
 	device.mode = 'video'
 	device.audio = true
-	const { instance } = await startInstance({ mode: 'companion', audio: 'off' })
+	const { instance, record } = await startInstance({ mode: 'companion', audio: 'off' })
 	await new Promise((resolve) => setTimeout(resolve, 3000))
 	check('manual mode', instance.mode === 'companion' && [...instance.areas].sort().join() === 'browser,companion')
+	check(
+		'companion mode offers the browser but not ontime',
+		/browser_url/.test(offered(record.actions)) && !/ontime_/.test(offered(record.actions)),
+	)
 	await instance.destroy()
 }
 
