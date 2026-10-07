@@ -1,5 +1,5 @@
 {
-	"name": "your-module-name",
+	"name": "konftools-showplaypi",
 	"version": "0.1.0",
 	"main": "dist/main.js",
 	"type": "module",
@@ -11,12 +11,13 @@
 		"build:main": "tsc -p tsconfig.build.json",
 		"dev": "tsc -p tsconfig.build.json --watch",
 		"lint:raw": "eslint",
-		"lint": "run lint:raw ."
+		"lint": "run lint:raw .",
+		"test": "node tests/run.mjs"
 	},
 	"license": "MIT",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/bitfocus/companion-module-your-module-name.git"
+		"url": "git+https://github.com/bitfocus/companion-module-konftools-showplaypi.git"
 	},
 	"engines": {
 		"node": "^22.20",

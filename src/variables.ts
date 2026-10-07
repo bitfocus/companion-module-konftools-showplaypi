@@ -1,15 +1,19 @@
+import type { CompanionVariableDefinitions } from '@companion-module/base'
 import type ModuleInstance from './main.js'
+import { commonVariableDefinitions, commonVariableValues, type CommonVariablesSchema } from './areas/common.js'
 
-export type VariablesSchema = {
-	variable1: string
-	variable2: string
-	variable3: string
+export type VariablesSchema = CommonVariablesSchema
+
+/** The variables of the areas active right now; the others are left out, so they do not appear. */
+export function variableDefinitions(_self: ModuleInstance): CompanionVariableDefinitions<VariablesSchema> {
+	return {
+		...commonVariableDefinitions(),
+	}
 }
 
-export function UpdateVariableDefinitions(self: ModuleInstance): void {
-	self.setVariableDefinitions({
-		variable1: { name: 'My first variable' },
-		variable2: { name: 'My second variable' },
-		variable3: { name: 'Another variable' },
-	})
+/** The current values of the variables defined by variableDefinitions(). */
+export function variableValues(self: ModuleInstance): Partial<VariablesSchema> {
+	return {
+		...commonVariableValues(self),
+	}
 }
