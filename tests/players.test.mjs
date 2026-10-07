@@ -1,7 +1,15 @@
 // Reading the replies of the video player, and the dropdowns built from them.
 import { createChecker } from './helpers.mjs'
-const { parseVideoStatus, parseVideoFiles, playlistsFingerprint, parseAudioStatus, parseAudioFiles, audioFingerprint } =
-	await import('../dist/players.js')
+const {
+	parseVideoStatus,
+	parseVideoFiles,
+	playlistsFingerprint,
+	parseAudioStatus,
+	parseAudioFiles,
+	audioFingerprint,
+	parseEmulators,
+} = await import('../dist/players.js')
+const { emulatorChoices, pageList, tabletArgs } = await import('../dist/areas/companion.js')
 const { entryChoices, playlistChoices, isCurrentEntry } = await import('../dist/choices.js')
 const { check, finish } = createChecker()
 
@@ -163,6 +171,37 @@ check(
 	'audio fingerprint notices a new jingle',
 	audioFingerprint(audioFiles) !==
 		audioFingerprint({ ...audioFiles, jingles: [...audioFiles.jingles, { file: 'x.wav' }] }),
+)
+
+// Companion: the emulator list example from docs/OSC.md
+const emulators = parseEmulators(
+	'{"emulators": [{"id": "JGogBBWueb55Y9MWfTphX", "name": "Stage left", "columns": 8, "rows": 4}]}',
+)
+check('emulator', emulators.length === 1 && emulators[0].id === 'JGogBBWueb55Y9MWfTphX' && emulators[0].columns === 8)
+check('no emulators', parseEmulators('{"emulators": []}').length === 0)
+check('emulator without name uses the id', parseEmulators('{"emulators": [{"id": "abc"}]}')[0].name === 'abc')
+const emulatorOptions = emulatorChoices(emulators)
+check('chooser comes first', emulatorOptions[0].id === '' && emulatorOptions[1].id === 'JGogBBWueb55Y9MWfTphX')
+check('emulator label shows the grid', emulatorOptions[1].label === 'Stage left (8 × 4)')
+
+check('page list: one page', pageList(' 3 ') === '3')
+check('page list: several pages', pageList('1, 2') === '1,2')
+check('page list: nonsense', pageList('a,b') === undefined && pageList('') === undefined)
+const tablet = (options) => (tabletArgs(options) ?? []).map((a) => a.value ?? a.type).join(' ')
+check('tablet: all pages', tablet({ allPages: true }) === '')
+check(
+	'tablet: all pages ignores a hidden grid',
+	tablet({ allPages: true, limitGrid: true, columns: 4, rows: 2 }) === '',
+)
+check('tablet: pages', tablet({ allPages: false, pages: '3' }) === '3')
+check(
+	'tablet: pages and grid',
+	tablet({ allPages: false, pages: '3', limitGrid: true, columns: 4, rows: 2 }) === '3 4 2',
+)
+check('tablet: bad pages', tabletArgs({ allPages: false, pages: 'x' }) === undefined)
+check(
+	'tablet: bad grid',
+	tabletArgs({ allPages: false, pages: '1', limitGrid: true, columns: 0, rows: 2 }) === undefined,
 )
 
 finish()

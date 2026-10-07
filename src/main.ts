@@ -9,13 +9,16 @@ import { ShowPlayPiConnection } from './connection.js'
 import type { OscArgument, OscMessage } from './osc.js'
 import {
 	audioFingerprint,
+	emulatorsFingerprint,
 	parseAudioFiles,
 	parseAudioStatus,
+	parseEmulators,
 	parseVideoFiles,
 	parseVideoStatus,
 	playlistsFingerprint,
 	type AudioFiles,
 	type AudioStatus,
+	type Emulator,
 	type Playlist,
 	type VideoStatus,
 } from './players.js'
@@ -81,6 +84,8 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 	audioStatus: AudioStatus | undefined
 	/** Jingles and playlists of the audio player, from /showplaypi/audio/list */
 	audioFiles: AudioFiles = { jingles: [], playlists: [] }
+	/** The emulators of the Companion on the device, from /showplaypi/companion/emulators */
+	emulators: Emulator[] = []
 
 	#detector = new ModeDetector()
 	#connection: ShowPlayPiConnection | undefined
@@ -137,6 +142,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 			this.videoPlaylists = []
 			this.audioStatus = undefined
 			this.audioFiles = { jingles: [], playlists: [] }
+			this.emulators = []
 		}
 
 		if (this.#connectionSettings() !== this.#connectionKey) {
@@ -222,6 +228,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		if (!this.connected) return
 		if (this.areas.has('video')) this.send('/showplaypi/video/list')
 		if (this.areas.has('audio')) this.send('/showplaypi/audio/list')
+		if (this.areas.has('companion')) this.send('/showplaypi/companion/emulators')
 	}
 
 	/**
@@ -285,6 +292,9 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 				case '/showplaypi/audio/files':
 					this.#handleAudioFiles(parseAudioFiles(json))
 					break
+				case '/showplaypi/companion/emulators':
+					this.#handleEmulators(parseEmulators(json))
+					break
 			}
 		} catch (error) {
 			this.log('warn', `Unreadable reply ${message.address}: ${(error as Error).message}`)
@@ -340,6 +350,12 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 
 	#handleAudioFiles(files: AudioFiles): void {
 		this.audioFiles = files
+		this.#updateDefinitions()
+		this.#updateVariableValues()
+	}
+
+	#handleEmulators(emulators: Emulator[]): void {
+		this.emulators = emulators
 		this.#updateDefinitions()
 		this.#updateVariableValues()
 	}
@@ -445,6 +461,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 			areasKey,
 			areas.has('video') ? playlistsFingerprint(this.videoPlaylists) : '',
 			areas.has('audio') ? audioFingerprint(this.audioFiles) : '',
+			areas.has('companion') ? emulatorsFingerprint(this.emulators) : '',
 		])
 		if (!force && key === this.#definitionsKey) return
 
@@ -452,6 +469,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		if (!force && areasChanged) this.log('info', `Offering the commands for: ${this.#describeMode()}`)
 		const videoAdded = areas.has('video') && !this.areas.has('video')
 		const audioAdded = areas.has('audio') && !this.areas.has('audio')
+		const companionAdded = areas.has('companion') && !this.areas.has('companion')
 		this.areas = areas
 		this.#definitionsKey = key
 
@@ -465,6 +483,7 @@ export default class ModuleInstance extends InstanceBase<ModuleSchema> {
 		// Fill the dropdowns of a newly active player straight away
 		if (videoAdded && this.connected) this.send('/showplaypi/video/list')
 		if (audioAdded && this.connected) this.send('/showplaypi/audio/list')
+		if (companionAdded && this.connected) this.send('/showplaypi/companion/emulators')
 	}
 
 	#updateVariableValues(): void {

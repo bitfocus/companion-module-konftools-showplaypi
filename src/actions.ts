@@ -5,13 +5,15 @@ import { browserActions, type BrowserActionsSchema } from './areas/browser.js'
 import { ontimeActions, type OntimeActionsSchema } from './areas/ontime.js'
 import { videoActions, type VideoActionsSchema } from './areas/video.js'
 import { audioActions, type AudioActionsSchema } from './areas/audio.js'
+import { companionActions, type CompanionActionsSchema } from './areas/companion.js'
 import { onlyIf } from './util.js'
 
 export type ActionsSchema = CommonActionsSchema &
 	BrowserActionsSchema &
 	OntimeActionsSchema &
 	VideoActionsSchema &
-	AudioActionsSchema
+	AudioActionsSchema &
+	CompanionActionsSchema
 
 /** The actions of the areas active right now; the others are left out, so they do not appear. */
 export function UpdateActions(self: ModuleInstance): void {
@@ -21,6 +23,7 @@ export function UpdateActions(self: ModuleInstance): void {
 		...onlyIf(self.areas.has('ontime'), ontimeActions(self)),
 		...onlyIf(self.areas.has('video'), videoActions(self)),
 		...onlyIf(self.areas.has('audio'), audioActions(self)),
+		...onlyIf(self.areas.has('companion'), companionActions(self)),
 	}
 	self.setActionDefinitions(actions)
 }

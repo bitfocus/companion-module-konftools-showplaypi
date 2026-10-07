@@ -3,8 +3,16 @@ import type ModuleInstance from './main.js'
 import { commonVariableDefinitions, commonVariableValues, type CommonVariablesSchema } from './areas/common.js'
 import { videoVariableDefinitions, videoVariableValues, type VideoVariablesSchema } from './areas/video.js'
 import { audioVariableDefinitions, audioVariableValues, type AudioVariablesSchema } from './areas/audio.js'
+import {
+	companionVariableDefinitions,
+	companionVariableValues,
+	type CompanionVariablesSchema,
+} from './areas/companion.js'
 
-export type VariablesSchema = CommonVariablesSchema & VideoVariablesSchema & AudioVariablesSchema
+export type VariablesSchema = CommonVariablesSchema &
+	VideoVariablesSchema &
+	AudioVariablesSchema &
+	CompanionVariablesSchema
 
 /**
  * The variables of the areas active right now; the others are left out, so they do not appear.
@@ -15,6 +23,7 @@ export function variableDefinitions(self: ModuleInstance): CompanionVariableDefi
 		...commonVariableDefinitions(),
 		...(self.areas.has('video') ? videoVariableDefinitions() : {}),
 		...(self.areas.has('audio') ? audioVariableDefinitions() : {}),
+		...(self.areas.has('companion') ? companionVariableDefinitions() : {}),
 	} as CompanionVariableDefinitions<VariablesSchema>
 }
 
@@ -24,5 +33,6 @@ export function variableValues(self: ModuleInstance): Partial<VariablesSchema> {
 		...commonVariableValues(self),
 		...(self.areas.has('video') ? videoVariableValues(self) : {}),
 		...(self.areas.has('audio') ? audioVariableValues(self) : {}),
+		...(self.areas.has('companion') ? companionVariableValues(self) : {}),
 	}
 }

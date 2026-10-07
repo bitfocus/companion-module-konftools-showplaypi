@@ -224,3 +224,28 @@ export function parseAudioFiles(json: string): AudioFiles {
 export function audioFingerprint(files: AudioFiles): string {
 	return JSON.stringify([files.jingles.map((jingle) => jingle.file), playlistsFingerprint(files.playlists)])
 }
+
+/** One emulator of the Companion running on the device, from /showplaypi/companion/emulators */
+export interface Emulator {
+	id: string
+	name: string
+	columns?: number
+	rows?: number
+}
+
+export function parseEmulators(json: string): Emulator[] {
+	const data = parseObject(json, 'emulator list')
+	if (!Array.isArray(data.emulators)) return []
+	const emulators: Emulator[] = []
+	for (const item of data.emulators) {
+		const emulator = record(item)
+		const id = str(emulator.id)
+		if (!id) continue
+		emulators.push({ id, name: str(emulator.name) ?? id, columns: num(emulator.columns), rows: num(emulator.rows) })
+	}
+	return emulators
+}
+
+export function emulatorsFingerprint(emulators: Emulator[]): string {
+	return JSON.stringify(emulators.map((emulator) => [emulator.id, emulator.name]))
+}

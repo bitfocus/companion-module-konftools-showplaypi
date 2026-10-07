@@ -164,7 +164,15 @@ async function startFakeDevice() {
 			case '/showplaypi/video/list':
 				return device.mode === 'video' && reply(rinfo, '/showplaypi/video/files', device.videoFiles)
 			case '/showplaypi/companion/emulators':
-				return device.mode === 'companion' && reply(rinfo, '/showplaypi/companion/emulators', { emulators: [] })
+				return (
+					device.mode === 'companion' &&
+					reply(rinfo, '/showplaypi/companion/emulators', {
+						emulators: [
+							{ id: 'JGogBBWueb55Y9MWfTphX', name: 'Stage left', columns: 8, rows: 4 },
+							{ id: 'k2', name: 'FOH', columns: 4, rows: 2 },
+						],
+					})
+				)
 			case '/showplaypi/audio/status':
 				return device.audio && reply(rinfo, '/showplaypi/audio/status', device.audioStatus)
 			case '/showplaypi/audio/list':
@@ -510,6 +518,51 @@ const device = await startFakeDevice()
 	check('reported ontime mode is used', instance.mode === 'ontime')
 	check('ontime mode offers the browser and ontime', /browser_url.*ontime_view/.test(offered(record.actions)))
 	device.reportMode = false
+	await instance.destroy()
+}
+
+// Companion mode, detected by probing: emulator list and views
+{
+	device.mode = 'companion'
+	device.audio = false
+	const { instance, record } = await startInstance()
+	await waitFor(
+		() => instance.mode === 'companion' && record.variables.companion_emulator_count === 2,
+		'companion mode',
+	)
+	check('companion mode detected', instance.mode === 'companion')
+	check(
+		'companion offers browser and companion actions',
+		/browser_url.*companion_emulator/.test(offered(record.actions)),
+	)
+	check('no ontime in companion mode', !/ontime_/.test(offered(record.actions)))
+	check('emulator count variable', record.variables.companion_emulator_count === 2)
+	const emulatorOption = record.actions.companion_emulator.options.find((o) => o.id === 'emulator')
+	check(
+		'emulator dropdown from the device',
+		emulatorOption.choices.map((c) => c.id).join() === ',JGogBBWueb55Y9MWfTphX,k2',
+		JSON.stringify(emulatorOption.choices),
+	)
+	const companionCommands = [
+		['companion_emulator', { emulator: '' }, '/showplaypi/companion/emulator'],
+		['companion_emulator', { emulator: 'k2' }, '/showplaypi/companion/emulator k2'],
+		['companion_emulator', { emulator: 'Stage left' }, '/showplaypi/companion/emulator Stage left'],
+		['companion_tablet', { allPages: true }, '/showplaypi/companion/tablet'],
+		['companion_tablet', { allPages: false, pages: '1,2' }, '/showplaypi/companion/tablet 1,2'],
+		[
+			'companion_tablet',
+			{ allPages: false, pages: '3', limitGrid: true, columns: 4, rows: 2 },
+			'/showplaypi/companion/tablet 3 4 2',
+		],
+		['companion_tablet', { allPages: false, pages: '' }, ''],
+		['companion_restart', {}, '/showplaypi/companion/restart'],
+	]
+	for (const [id, options, expected] of companionCommands) {
+		const messages = (await run(device, record, id, options)).filter(
+			(m) => m.address !== '/showplaypi/companion/emulators',
+		)
+		check(id + ' ' + JSON.stringify(options), sent(messages) === expected, sent(messages))
+	}
 	await instance.destroy()
 }
 
